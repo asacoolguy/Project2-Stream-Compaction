@@ -29,7 +29,7 @@ namespace StreamCompaction {
 				if (index > 0) {
 					output[index] = input[index - 1];
 				}
-				else {
+				else if (index == 0){
 					output[index] = 0;
 				}
 			}
@@ -58,8 +58,7 @@ namespace StreamCompaction {
 			cudaMemcpy(dev_buffer2, dev_buffer1, sizeInBytes, cudaMemcpyDeviceToDevice);
 			checkCUDAError("cudaMemcopy from dev_buffer1 to dev_buffer2 failed!");
 			
-			int blockSize = 256;
-			dim3 fullBlocksPerGrid((n + blockSize - 1) / blockSize);
+			dim3 fullBlocksPerGrid((n + Common::blockSize - 1) / Common::blockSize);
 
 			timer().startGpuTimer();
             
@@ -69,14 +68,14 @@ namespace StreamCompaction {
 
 			for (int i = 1; i <= ceiling; i++) {
 				int interval = 1 << (i - 1);
-				kernNaiveScan << < fullBlocksPerGrid, blockSize >> > (n, *input, *output, interval);
+				kernNaiveScan << < fullBlocksPerGrid, Common::blockSize >> > (n, *input, *output, interval);
 				checkCUDAError("kernNaiveScan failed");
 				std::swap(input, output);
 
 			}
 
 			// shift the output array to the right by 1
-			kernMakeExclusive << < fullBlocksPerGrid, blockSize >> > (n, *input, *output);
+			kernMakeExclusive << < fullBlocksPerGrid, Common::blockSize >> > (n, *input, *output);
 			checkCUDAError("kernMakeExclusive failed");
 
             timer().endGpuTimer();
