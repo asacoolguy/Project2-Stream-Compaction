@@ -8,7 +8,7 @@ namespace StreamCompaction {
 
         void scan(int n, int *odata, const int *idata);
 
-		void scanHelper(int n, int size, int* dev_buffer);
+		void scanHelper(int n, int logn, dim3 fullBlocksPerGrid, int* dev_buffer);
 
         int compact(int n, int *odata, const int *idata);
     }
