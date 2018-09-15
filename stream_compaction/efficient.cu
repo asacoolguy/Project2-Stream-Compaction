@@ -33,9 +33,8 @@ namespace StreamCompaction {
         /**
          * Performs prefix-sum (aka scan) on idata, storing the result into odata.
          */
+		// TODO: for somereason this fails for 2^n where n >= 9. weird. am i doing memcpy wrong?
         void scan(int n, int *odata, const int *idata) {
-			if (n <= 0) return;
-
 			// allocate buffer array on global memory
 			int* dev_original;
 			int* dev_buffer;
@@ -55,7 +54,7 @@ namespace StreamCompaction {
 			checkCUDAError("cudaMemcopy from idata to dev_original failed!");
 
 			// copy the original data into the buffer
-			Common::kernCopyArray<<<fullBlocksPerGrid, Common::blockSize>>>(n, size, dev_original, dev_buffer);
+			Common::kernCopyArray << <fullBlocksPerGrid, Common::blockSize >> >(n, size, dev_original, dev_buffer);
 			checkCUDAError("kernCopy from dev_original to dev_buffer failed!");
 
 			timer().startGpuTimer();
@@ -128,7 +127,6 @@ namespace StreamCompaction {
 			// ---------- allocate global memory ------------
 			// ----------------------------------------------
 
-			int* dev_original;
 			int* dev_input;
 			int* dev_output;
 			int* dev_bools;
@@ -137,8 +135,6 @@ namespace StreamCompaction {
 			size_t originalSizeInBytes = n * sizeof(int);
 			size_t sizeInBytes = size * sizeof(int);
 
-			cudaMalloc((void**)&dev_original, originalSizeInBytes);
-			checkCUDAError("cudaMalloc dev_original failed!");
 			cudaMalloc((void**)&dev_input, sizeInBytes);
 			checkCUDAError("cudaMalloc dev_input failed!");
 			cudaMalloc((void**)&dev_output, sizeInBytes);
@@ -157,12 +153,8 @@ namespace StreamCompaction {
 			// ----------------------------------------------------
 
 			// copy the input into global memory
-			cudaMemcpy(dev_original, idata, originalSizeInBytes, cudaMemcpyHostToDevice);
+			cudaMemcpy(dev_input, idata, n * sizeof(int), cudaMemcpyHostToDevice);
 			checkCUDAError("cudaMemcopy from idata to dev_original failed!");
-
-			// copy the original data array into the input array to round it to a size of power of two
-			Common::kernCopyArray <<<fullBlocksPerGrid, Common::blockSize>>>(n, size, dev_original, dev_input);
-			checkCUDAError("cudaMemcopy from dev_original to dev_input failed!");
 
 			// ---------------------------------------
 			// ---------- start algorithm ------------
@@ -193,26 +185,21 @@ namespace StreamCompaction {
 			// ---------- read global memory into host memory ------------
 			// -----------------------------------------------------------
 
-			// first, read dev_indices to get the count of non-zero elements
-			cudaMemcpy(odata, dev_indices, originalSizeInBytes, cudaMemcpyDeviceToHost);
+			// first, read dev_bool to get the count of non-zero elements
+			cudaMemcpy(odata, dev_bools, originalSizeInBytes, cudaMemcpyDeviceToHost);
 			checkCUDAError("cudaMemcopy from dev_output to odata failed!");
-			count = odata[n - 1];
-			if (size != n) count++; // adjust the count if the array size is not power of 2
-
-			// next, get the output array into the "original" array which has the right size
-			Common::kernCopyArray << <fullBlocksPerGrid, Common::blockSize >> >(size, n, dev_output, dev_original);
-			checkCUDAError("cudaMemcopy from dev_original to dev_input failed!");
+			for (int i = 0; i < n; i++) {
+				if (odata[i] != 0) count++;
+			}
 
 			// finally, get the values out of the original array
-			cudaMemcpy(odata, dev_original, originalSizeInBytes, cudaMemcpyDeviceToHost);
+			cudaMemcpy(odata, dev_output, originalSizeInBytes, cudaMemcpyDeviceToHost);
 			checkCUDAError("cudaMemcopy from dev_output to odata failed!");
 
 			// ------------------------------------------
 			// ---------- free global memory ------------
 			// ------------------------------------------
 
-			cudaFree(dev_original);
-			checkCUDAError("cudaFree on dev_original failed");
 			cudaFree(dev_input);
 			checkCUDAError("cudaFree on dev_input failed");
 			cudaFree(dev_output);
