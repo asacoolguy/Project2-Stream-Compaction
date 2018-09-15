@@ -16,14 +16,14 @@ namespace StreamCompaction {
 		int paddedData[1 << 16];
 
 		__global__ void kernEfficientUpSweep(int n, int* buffer, int interval) {
-			int index = (blockIdx.x * blockDim.x) + threadIdx.x * interval;
+			int index = (blockIdx.x * blockDim.x + threadIdx.x) * interval;
 			if (index < n) {
 				buffer[index + interval - 1] += buffer[index + (interval >> 1) - 1];
 			}
 		}
 
 		__global__ void kernEfficientDownSweep(int n, int* buffer, int interval, int smallInterval) {
-			int index = (blockIdx.x * blockDim.x) + threadIdx.x * interval;
+			int index = (blockIdx.x * blockDim.x + threadIdx.x) * interval;
 
 			if (index < n) {
 				int t = buffer[index + smallInterval - 1];
@@ -35,6 +35,7 @@ namespace StreamCompaction {
         /**
          * Performs prefix-sum (aka scan) on idata, storing the result into odata.
          */
+		// TODO: still has that bug where logn > 13 will crash some programs. maybe something wrong with cudaMalloc and memCpy?
         void scan(int n, int *odata, const int *idata) {
 			// allocate 2 arrays on global memory. one original. one resized.
 			int* dev_padded;
