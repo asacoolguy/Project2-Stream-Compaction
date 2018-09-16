@@ -12,20 +12,20 @@ namespace StreamCompaction {
             return timer;
         }
 
-		bool debug = false;
+// #define DEBUG 
 		int paddedData[1 << 16];
 
 		__global__ void kernEfficientUpSweep(int n, int* buffer, int interval) {
-			int index = (blockIdx.x * blockDim.x + threadIdx.x) * interval;
-			if (index < n) {
+			// TODO: this interval thing is overloading the limit of int and causing it to roll back
+			int index = blockIdx.x * blockDim.x + threadIdx.x;
+			if (index < n && index % interval == 0) {
 				buffer[index + interval - 1] += buffer[index + (interval >> 1) - 1];
 			}
 		}
 
 		__global__ void kernEfficientDownSweep(int n, int* buffer, int interval, int smallInterval) {
-			int index = (blockIdx.x * blockDim.x + threadIdx.x) * interval;
-
-			if (index < n) {
+			int index = blockIdx.x * blockDim.x + threadIdx.x;
+			if (index < n && index % interval == 0) {
 				int t = buffer[index + smallInterval - 1];
 				buffer[index + smallInterval - 1] = buffer[index + interval - 1];
 				buffer[index + interval - 1] += t;
@@ -61,14 +61,14 @@ namespace StreamCompaction {
 
 			timer().startGpuTimer();
 
-			if (debug) {
+#ifdef DEBUG
 				printf("before start: [");
 				cudaMemcpy(paddedData, dev_padded, paddedSizeInBytes, cudaMemcpyDeviceToHost);
 				for (int i = 0; i < paddedSize; i++) {
 					printf("%d, ", paddedData[i]);
 				}
 				printf("] \n");
-			}
+#endif
 
 			scanHelper(paddedSize, logn, fullBlocksPerGrid, dev_padded);
 
@@ -99,27 +99,27 @@ namespace StreamCompaction {
 				checkCUDAError("kernEfficientUpSweep failed!");
 			}
 
-			if (debug) {
+#ifdef DEBUG
 				printf("after up sweep: [");
 				cudaMemcpy(paddedData, dev_buffer, n * sizeof(int), cudaMemcpyDeviceToHost);
 				for (int i = 0; i < n; i++) {
 					printf("%d, ", paddedData[i]);
 				}
 				printf("] \n");
-			}
+#endif
 
 			// first set the last value to 0
 			Common::kernSetIndexInData << <1, 1 >> > (n, n - 1, 0, dev_buffer);
 			checkCUDAError("kernSetIndexInData failed!");
 
-			if (debug) {
+#ifdef DEBUG
 				printf("after setting last value: [");
 				cudaMemcpy(paddedData, dev_buffer, n * sizeof(int), cudaMemcpyDeviceToHost);
 				for (int i = 0; i < n; i++) {
 					printf("%d, ", paddedData[i]);
 				}
 				printf("] \n");
-			}
+#endif
 
 			// down sweep
 			for (int i = logn - 1; i >= 0; i--) {
@@ -129,14 +129,14 @@ namespace StreamCompaction {
 				checkCUDAError("kernEfficientDownSweep failed!");
 			}
 
-			if (debug) {
+#ifdef DEBUG
 				printf("after downsweep: [");
 				cudaMemcpy(paddedData, dev_buffer, n * sizeof(int), cudaMemcpyDeviceToHost);
 				for (int i = 0; i < n; i++) {
 					printf("%d, ", paddedData[i]);
 				}
 				printf("] \n");
-			}
+#endif
 		}
 
 
