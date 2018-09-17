@@ -13,7 +13,7 @@
 #include <stream_compaction/thrust.h>
 #include "testing_helpers.hpp"
 
-const int SIZE = 1 << 20; // feel free to change the size of array
+const int SIZE = 1 << 16; // feel free to change the size of array
 const int NPOT = SIZE - 6; // Non-Power-Of-Two
 int *a = new int[SIZE];
 int *b = new int[SIZE];
@@ -67,18 +67,32 @@ int main(int argc, char* argv[]) {
     printCmpResult(NPOT, b, c);
 
     zeroArray(SIZE, c);
-    printDesc("work-efficient scan, power-of-two");
+    printDesc("work-efficient scan, power-of-two, optimized thread number");
     StreamCompaction::Efficient::scan(SIZE, c, a);
     printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
     printArray(SIZE, c, true);
     printCmpResult(SIZE, b, c);
 
     zeroArray(SIZE, c);
-    printDesc("work-efficient scan, non-power-of-two");
+    printDesc("work-efficient scan, non-power-of-two, optimized thread number");
     StreamCompaction::Efficient::scan(NPOT, c, a);
     printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
     printArray(NPOT, c, true);
     printCmpResult(NPOT, b, c);
+
+	zeroArray(SIZE, c);
+	printDesc("work-efficient scan, power-of-two, unoptimized thread number");
+	StreamCompaction::Efficient::scan(SIZE, c, a, false);
+	printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
+	printArray(SIZE, c, true);
+	printCmpResult(SIZE, b, c);
+
+	zeroArray(SIZE, c);
+	printDesc("work-efficient scan, non-power-of-two, unoptimized thread number");
+	StreamCompaction::Efficient::scan(NPOT, c, a, false);
+	printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
+	printArray(NPOT, c, true);
+	printCmpResult(NPOT, b, c);
 
     zeroArray(SIZE, c);
     printDesc("thrust scan, power-of-two");
@@ -140,18 +154,32 @@ int main(int argc, char* argv[]) {
 	printCmpLenResult(count, expectedCount, b, c);
 
     zeroArray(SIZE, c);
-    printDesc("work-efficient compact, power-of-two");
+    printDesc("work-efficient compact, power-of-two, optimized thread number");
     count = StreamCompaction::Efficient::compact(SIZE, c, a);
     printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
     printArray(count, c, true);
     printCmpLenResult(count, expectedCount, b, c);
 
     zeroArray(SIZE, c);
-    printDesc("work-efficient compact, non-power-of-two");
+    printDesc("work-efficient compact, non-power-of-two, otimized thread number");
     count = StreamCompaction::Efficient::compact(NPOT, c, a);
     printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
     printArray(count, c, true);
     printCmpLenResult(count, expectedNPOT, b, c);
+
+	zeroArray(SIZE, c);
+	printDesc("work-efficient compact, power-of-two, , unoptimized thread number");
+	count = StreamCompaction::Efficient::compact(SIZE, c, a, false);
+	printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
+	printArray(count, c, true);
+	printCmpLenResult(count, expectedCount, b, c);
+
+	zeroArray(SIZE, c);
+	printDesc("work-efficient compact, non-power-of-two, unoptimized thread number");
+	count = StreamCompaction::Efficient::compact(NPOT, c, a, false);
+	printElapsedTime(StreamCompaction::Efficient::timer().getGpuElapsedTimeForPreviousOperation(), "(CUDA Measured)");
+	printArray(count, c, true);
+	printCmpLenResult(count, expectedNPOT, b, c);
 
     system("pause"); // stop Win32 console from closing on exit
 	delete[] a;

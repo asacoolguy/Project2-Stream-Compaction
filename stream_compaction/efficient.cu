@@ -15,17 +15,32 @@ namespace StreamCompaction {
 // #define DEBUG 
 		int paddedData[1 << 16];
 
-		__global__ void kernEfficientUpSweep(int n, int* buffer, int interval) {
-			// TODO: this interval thing is overloading the limit of int and causing it to roll back
+		__global__ void kernUpSweep(int n, int* buffer, int interval) {
 			int index = blockIdx.x * blockDim.x + threadIdx.x;
 			if (index < n && index % interval == 0) {
 				buffer[index + interval - 1] += buffer[index + (interval >> 1) - 1];
 			}
 		}
 
-		__global__ void kernEfficientDownSweep(int n, int* buffer, int interval, int smallInterval) {
+		__global__ void kernDownSweep(int n, int* buffer, int interval, int smallInterval) {
 			int index = blockIdx.x * blockDim.x + threadIdx.x;
 			if (index < n && index % interval == 0) {
+				int t = buffer[index + smallInterval - 1];
+				buffer[index + smallInterval - 1] = buffer[index + interval - 1];
+				buffer[index + interval - 1] += t;
+			}
+		}
+
+		__global__ void kernEfficientUpSweep(int n, int* buffer, int interval) {
+			int index = (blockIdx.x * blockDim.x + threadIdx.x) * interval;
+			if (index < n) {
+				buffer[index + interval - 1] += buffer[index + (interval >> 1) - 1];
+			}
+		}
+
+		__global__ void kernEfficientDownSweep(int n, int* buffer, int interval, int smallInterval) {
+			int index = (blockIdx.x * blockDim.x + threadIdx.x) * interval;
+			if (index < n) {
 				int t = buffer[index + smallInterval - 1];
 				buffer[index + smallInterval - 1] = buffer[index + interval - 1];
 				buffer[index + interval - 1] += t;
@@ -35,8 +50,7 @@ namespace StreamCompaction {
         /**
          * Performs prefix-sum (aka scan) on idata, storing the result into odata.
          */
-		// TODO: still has that bug where logn > 13 will crash some programs. maybe something wrong with cudaMalloc and memCpy?
-        void scan(int n, int *odata, const int *idata) {
+        void scan(int n, int *odata, const int *idata, bool efficient) {
 			// allocate 2 arrays on global memory. one original. one resized.
 			int* dev_padded;
 			int* dev_original;
@@ -70,7 +84,7 @@ namespace StreamCompaction {
 				printf("] \n");
 #endif
 
-			scanHelper(paddedSize, logn, fullBlocksPerGrid, dev_padded);
+			scanHelper(paddedSize, logn, dev_padded, efficient);
 
 			timer().endGpuTimer();
 
@@ -91,12 +105,24 @@ namespace StreamCompaction {
 
 
 		// helper function for scan
-		void scanHelper(int n, int logn, dim3 fullBlocksPerGrid, int* dev_buffer) {
+		void scanHelper(int n, int logn, int* dev_buffer, bool efficient) {
+			
+			if (efficient) {
+				for (int i = 0; i <= logn - 1; i++) {
+					int interval = 1 << (i + 1);
+					dim3 numBlocks(((n >> (i + 1)) + Common::blockSize + 1) / Common::blockSize);
+					kernEfficientUpSweep << < numBlocks, Common::blockSize >> > (n, dev_buffer, interval);
+					checkCUDAError("kernEfficientUpSweep failed!");
+				}
+			}
+			else {
+				dim3 fullBlocksPerGrid((n + Common::blockSize - 1) / Common::blockSize);
 
-			for (int i = 0; i <= logn - 1; i++) {
-				int interval = 1 << (i + 1);
-				kernEfficientUpSweep << < fullBlocksPerGrid, Common::blockSize >> > (n, dev_buffer, interval);
-				checkCUDAError("kernEfficientUpSweep failed!");
+				for (int i = 0; i <= logn - 1; i++) {
+					int interval = 1 << (i + 1);
+					kernUpSweep << < fullBlocksPerGrid, Common::blockSize >> > (n, dev_buffer, interval);
+					checkCUDAError("kernEfficientUpSweep failed!");
+				}
 			}
 
 #ifdef DEBUG
@@ -122,12 +148,25 @@ namespace StreamCompaction {
 #endif
 
 			// down sweep
-			for (int i = logn - 1; i >= 0; i--) {
-				int smallInterval = 1 << i;
-				int interval = 1 << (i + 1);
-				kernEfficientDownSweep << < fullBlocksPerGrid, Common::blockSize >> > (n, dev_buffer, interval, smallInterval);
-				checkCUDAError("kernEfficientDownSweep failed!");
-			}
+				if (efficient) {
+					for (int i = logn - 1; i >= 0; i--) {
+						int smallInterval = 1 << i;
+						int interval = 1 << (i + 1);
+						dim3 numBlocks(((n >> (i + 1)) + Common::blockSize + 1) / Common::blockSize);
+						kernEfficientDownSweep << < numBlocks, Common::blockSize >> > (n, dev_buffer, interval, smallInterval);
+						checkCUDAError("kernEfficientDownSweep failed!");
+					}
+				}
+				else {
+					dim3 fullBlocksPerGrid((n + Common::blockSize - 1) / Common::blockSize);
+
+					for (int i = logn - 1; i >= 0; i--) {
+						int smallInterval = 1 << i;
+						int interval = 1 << (i + 1);
+						kernDownSweep << < fullBlocksPerGrid, Common::blockSize >> > (n, dev_buffer, interval, smallInterval);
+						checkCUDAError("kernEfficientDownSweep failed!");
+					}
+				}
 
 #ifdef DEBUG
 				printf("after downsweep: [");
@@ -149,7 +188,7 @@ namespace StreamCompaction {
          * @param idata  The array of elements to compact.
          * @returns      The number of elements remaining after compaction.
          */
-        int compact(int n, int *odata, const int *idata) {
+        int compact(int n, int *odata, const int *idata, bool efficient) {
 			if (n <= 0) return -1;
 
 			int count = 0;
@@ -202,7 +241,7 @@ namespace StreamCompaction {
 			// exclusive scan the boolean array
 			cudaMemcpy(dev_indices, dev_bools, paddedSizeInBytes, cudaMemcpyDeviceToDevice);
 			checkCUDAError("cudaMemcopy from dev_bools to dev_indices failed!");
-			scanHelper(paddedSize, logn, fullBlocksPerGrid, dev_indices);
+			scanHelper(paddedSize, logn, dev_indices, efficient);
 
 			// scatter 
 			Common::kernScatter << <fullBlocksPerGrid, Common::blockSize >> > (paddedSize, dev_output, dev_input, dev_bools, dev_indices);
