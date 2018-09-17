@@ -53,25 +53,20 @@ namespace StreamCompaction {
         void scan(int n, int *odata, const int *idata, bool efficient) {
 			// allocate 2 arrays on global memory. one original. one resized.
 			int* dev_padded;
-			int* dev_original;
 
 			int logn = ilog2ceil(n);
 			int paddedSize = 1 << logn;
 			size_t originalSizeInBytes = n * sizeof(int);
 			size_t paddedSizeInBytes = paddedSize * sizeof(int);
 
-			dim3 fullBlocksPerGrid((paddedSize + Common::blockSize - 1) / Common::blockSize);
-
-			cudaMalloc((void**)&dev_original, originalSizeInBytes);
-			checkCUDAError("cudaMalloc dev_original failed!");
 			cudaMalloc((void**)&dev_padded, paddedSizeInBytes);
 			checkCUDAError("cudaMalloc dev_padded failed!");
 
-			// copy input into dev_original, then copy dev_original into dev_padded
-			cudaMemcpy(dev_original, idata, originalSizeInBytes, cudaMemcpyHostToDevice);
+			// initialize dev_padded to 0 and copy idata into it
+			cudaMemset(dev_padded, 0, paddedSizeInBytes);
+			checkCUDAError("cudaMemset failed");
+			cudaMemcpy(dev_padded, idata, originalSizeInBytes, cudaMemcpyHostToDevice);
 			checkCUDAError("cudaMemcopy from idata to dev_original failed!");
-			Common::kernCopyArray << <fullBlocksPerGrid, Common::blockSize >> > (n, paddedSize, dev_original, dev_padded);
-			checkCUDAError("kernCopyArray from dev_original to dev_padded failed!");
 
 			timer().startGpuTimer();
 
@@ -89,22 +84,19 @@ namespace StreamCompaction {
 			timer().endGpuTimer();
 
 
-			// copy padded data back into original data
-			Common::kernCopyArray << <fullBlocksPerGrid, Common::blockSize >> > (paddedSize, n, dev_padded, dev_original);
-			checkCUDAError("kernCopyArray from dev_padded to dev_original failed!");
-
-			cudaMemcpy(odata, dev_original, originalSizeInBytes, cudaMemcpyDeviceToHost);
+			// copy padded data back into odata
+			cudaMemcpy(odata, dev_padded, originalSizeInBytes, cudaMemcpyDeviceToHost);
 			checkCUDAError("cudaMemcopy from dev_original to odata failed!");
 
 			// free the allocated arrays
-			cudaFree(dev_original);
-			checkCUDAError("cudaFree on dev_original failed");
 			cudaFree(dev_padded);
 			checkCUDAError("cudaFree on dev_padded failed");
         }
 
 
-		// helper function for scan
+		/**
+		* Helper function for scan that does the upsweeps and downsweeps
+		*/
 		void scanHelper(int n, int logn, int* dev_buffer, bool efficient) {
 			
 			if (efficient) {
@@ -126,55 +118,55 @@ namespace StreamCompaction {
 			}
 
 #ifdef DEBUG
-				printf("after up sweep: [");
-				cudaMemcpy(paddedData, dev_buffer, n * sizeof(int), cudaMemcpyDeviceToHost);
-				for (int i = 0; i < n; i++) {
-					printf("%d, ", paddedData[i]);
-				}
-				printf("] \n");
+			printf("after up sweep: [");
+			cudaMemcpy(paddedData, dev_buffer, n * sizeof(int), cudaMemcpyDeviceToHost);
+			for (int i = 0; i < n; i++) {
+				printf("%d, ", paddedData[i]);
+			}
+			printf("] \n");
 #endif
 
 			// first set the last value to 0
-			Common::kernSetIndexInData << <1, 1 >> > (n, n - 1, 0, dev_buffer);
+			cudaMemset(dev_buffer + n - 1, 0, sizeof(int));
 			checkCUDAError("kernSetIndexInData failed!");
 
 #ifdef DEBUG
-				printf("after setting last value: [");
-				cudaMemcpy(paddedData, dev_buffer, n * sizeof(int), cudaMemcpyDeviceToHost);
-				for (int i = 0; i < n; i++) {
-					printf("%d, ", paddedData[i]);
-				}
-				printf("] \n");
+			printf("after setting last value: [");
+			cudaMemcpy(paddedData, dev_buffer, n * sizeof(int), cudaMemcpyDeviceToHost);
+			for (int i = 0; i < n; i++) {
+				printf("%d, ", paddedData[i]);
+			}
+			printf("] \n");
 #endif
 
 			// down sweep
-				if (efficient) {
-					for (int i = logn - 1; i >= 0; i--) {
-						int smallInterval = 1 << i;
-						int interval = 1 << (i + 1);
-						dim3 numBlocks(((n >> (i + 1)) + Common::blockSize + 1) / Common::blockSize);
-						kernEfficientDownSweep << < numBlocks, Common::blockSize >> > (n, dev_buffer, interval, smallInterval);
-						checkCUDAError("kernEfficientDownSweep failed!");
-					}
+			if (efficient) {
+				for (int i = logn - 1; i >= 0; i--) {
+					int smallInterval = 1 << i;
+					int interval = 1 << (i + 1);
+					dim3 numBlocks(((n >> (i + 1)) + Common::blockSize + 1) / Common::blockSize);
+					kernEfficientDownSweep << < numBlocks, Common::blockSize >> > (n, dev_buffer, interval, smallInterval);
+					checkCUDAError("kernEfficientDownSweep failed!");
 				}
-				else {
-					dim3 fullBlocksPerGrid((n + Common::blockSize - 1) / Common::blockSize);
+			}
+			else {
+				dim3 fullBlocksPerGrid((n + Common::blockSize - 1) / Common::blockSize);
 
-					for (int i = logn - 1; i >= 0; i--) {
-						int smallInterval = 1 << i;
-						int interval = 1 << (i + 1);
-						kernDownSweep << < fullBlocksPerGrid, Common::blockSize >> > (n, dev_buffer, interval, smallInterval);
-						checkCUDAError("kernEfficientDownSweep failed!");
-					}
+				for (int i = logn - 1; i >= 0; i--) {
+					int smallInterval = 1 << i;
+					int interval = 1 << (i + 1);
+					kernDownSweep << < fullBlocksPerGrid, Common::blockSize >> > (n, dev_buffer, interval, smallInterval);
+					checkCUDAError("kernEfficientDownSweep failed!");
 				}
+			}
 
 #ifdef DEBUG
-				printf("after downsweep: [");
-				cudaMemcpy(paddedData, dev_buffer, n * sizeof(int), cudaMemcpyDeviceToHost);
-				for (int i = 0; i < n; i++) {
-					printf("%d, ", paddedData[i]);
-				}
-				printf("] \n");
+			printf("after downsweep: [");
+			cudaMemcpy(paddedData, dev_buffer, n * sizeof(int), cudaMemcpyDeviceToHost);
+			for (int i = 0; i < n; i++) {
+				printf("%d, ", paddedData[i]);
+			}
+			printf("] \n");
 #endif
 		}
 
@@ -197,14 +189,13 @@ namespace StreamCompaction {
 			// ---------- allocate global memory ------------
 			// ----------------------------------------------
 
-			int *dev_original, *dev_input, *dev_output, *dev_bools, *dev_indices;
+			int *dev_input, *dev_output, *dev_bools, *dev_indices;
 			int logn = ilog2ceil(n);
 			int paddedSize = 1 << logn;
 			size_t originalSizeInBytes = n * sizeof(int);
 			size_t paddedSizeInBytes = paddedSize * sizeof(int);
+			dim3 fullBlocksPerGrid((paddedSize + Common::blockSize - 1) / Common::blockSize);
 
-			cudaMalloc((void**)&dev_original, originalSizeInBytes);
-			checkCUDAError("cudaMalloc dev_original failed!");
 			cudaMalloc((void**)&dev_input, paddedSizeInBytes);
 			checkCUDAError("cudaMalloc dev_input failed!");
 			cudaMalloc((void**)&dev_output, paddedSizeInBytes);
@@ -214,19 +205,15 @@ namespace StreamCompaction {
 			cudaMalloc((void**)&dev_indices, paddedSizeInBytes);
 			checkCUDAError("cudaMalloc dev_indices failed!");
 
-			dim3 fullBlocksPerGrid((paddedSizeInBytes + Common::blockSize - 1) / Common::blockSize);
-
 			// ----------------------------------------------------
 			// ---------- copy data into global memory ------------
 			// ----------------------------------------------------
 
-			// first copy the input into dev_original
-			cudaMemcpy(dev_original, idata, originalSizeInBytes, cudaMemcpyHostToDevice);
+			// set dev_input to 0 then copy idata into it
+			cudaMemset(dev_input, 0, paddedSizeInBytes);
+			checkCUDAError("cudaMemset failed");
+			cudaMemcpy(dev_input, idata, originalSizeInBytes, cudaMemcpyHostToDevice);
 			checkCUDAError("cudaMemcopy from idata to dev_original failed!");
-
-			// then copy the non-padded dev_original data into the padded dev_input
-			Common::kernCopyArray << <fullBlocksPerGrid, Common::blockSize >> > (n, paddedSize, dev_original, dev_input);
-			checkCUDAError("kernCopyArray from dev_original to dev_original failed!");
 
 			// ---------------------------------------
 			// ---------- start algorithm ------------
@@ -254,27 +241,21 @@ namespace StreamCompaction {
 			// ---------- read data from global memory ------------
 			// -----------------------------------------------------------
 
-			// first, copy dev_bool into dev_original and read it to get the count of non-zero elements. 
-			Common::kernCopyArray << <fullBlocksPerGrid, Common::blockSize >> > (paddedSize, n, dev_bools, dev_original);
-			checkCUDAError("kernCopyArray from dev_bools to dev_original failed!");
-			cudaMemcpy(odata, dev_original, originalSizeInBytes, cudaMemcpyDeviceToHost);
+			// first, copy dev_bool into odata to get the count of non-zero elements
+			cudaMemcpy(odata, dev_bools, originalSizeInBytes, cudaMemcpyDeviceToHost);
 			checkCUDAError("cudaMemcopy from dev_original to odata failed!");
 			for (int i = 0; i < n; i++) {
 				if (odata[i] != 0) count++;
 			}
 
-			// finally, copy dev_output into dev_original and read it to get the output
-			Common::kernCopyArray << <fullBlocksPerGrid, Common::blockSize >> > (paddedSize, n, dev_output, dev_original);
-			checkCUDAError("kernCopyArray from dev_output to dev_original failed!");
-			cudaMemcpy(odata, dev_original, originalSizeInBytes, cudaMemcpyDeviceToHost);
+			// finally, copy dev_output into odata
+			cudaMemcpy(odata, dev_output, originalSizeInBytes, cudaMemcpyDeviceToHost);
 			checkCUDAError("cudaMemcopy from dev_original to odata failed!");
 
 			// ------------------------------------------
 			// ---------- free global memory ------------
 			// ------------------------------------------
 
-			cudaFree(dev_original);
-			checkCUDAError("cudaFree on dev_original failed");
 			cudaFree(dev_input);
 			checkCUDAError("cudaFree on dev_input failed");
 			cudaFree(dev_output);

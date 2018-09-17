@@ -27,22 +27,6 @@ namespace StreamCompaction {
 			}
 		}
 
-		/**
-		* Copies elements from array1 into array2. 
-		* If array 1 has less elements, the empty elements in array 2 will be 0.
-		* If array 1 has more elements, the extra elements will not be copied over.
-		*/
-		__global__ void kernCopyArray(int size1, int size2, int * array1, int * array2)	{
-			int index = (blockIdx.x * blockDim.x) + threadIdx.x;
-			if (index < size2) {
-				if (index < size1) {
-					array2[index] = array1[index];
-				}
-				else {
-					array2[index] = 0;
-				}
-			}
-		}
 
         /**
          * Maps an array to an array of 0s and 1s for stream compaction. Elements
